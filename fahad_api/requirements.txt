@@ -3,3 +3,5 @@ numpy>=1.26
 # only needed to serve Hafsah's real model (not the dummy):
 torch
 torchvision
+matplotlib
+scikit-learn
