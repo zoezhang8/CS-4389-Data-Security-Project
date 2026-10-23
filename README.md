@@ -11,7 +11,7 @@ top of each.
 | Hafsah | Victim model & data pipeline | [`ai_security_project_victim/`](ai_security_project_victim/) |
 | Fahad | Query API & logging | [`fahad_api/`](fahad_api/) |
 | Sami | Data poisoning (label-flipping) + k-NN defense | [`poisoning/`](poisoning/) |
-| Zoe | Model extraction attack & repo setup | [`extraction/`](extraction/) |
+| Zoe | Model extraction attack & repo setup — **done** | [`extraction/`](extraction/) |
 | — | Detection monitor on live API query logs | *not started yet* |
 | — | Threat model, D1/D2 report | *see team doc* |
 
@@ -43,21 +43,25 @@ cd fahad_api && pip install -r requirements.txt && MODEL=victim python api.py
 # 2. Poisoning track (writes poisoning/poison_results/results.csv + a plot)
 cd poisoning && python label_flip.py
 
-# 3. Extraction track — see extraction/README.md
+# 3. Extraction track (writes extraction/extraction_results/results.csv, a plot,
+#    and the best substitute's weights) — see extraction/README.md
+cd extraction && python extract.py
 ```
 
 ## Known issues / open items
 
-- **`ai_security_project_victim/victim_model.py` has a formatting bug**: on the
-  `nn.Linear(784, 128)` line, a trailing `nn.ReLU(),` got swallowed into the
-  inline comment, so the trained network only has **one** ReLU (after the second
-  Linear) instead of the two described in the docstring. It still trains fine
-  (96.42% test accuracy), but it doesn't match the documented architecture.
-  **This needs a team decision before fixing** — the saved `victim.pt` weights
-  were trained *with* this bug, and ReLU has no parameters, so just adding the
-  missing line back in without retraining would silently change the model's
-  behavior without changing its saved weights. Flagging here rather than
-  silently patching it.
+- **Fixed: `victim_model.py` missing ReLU.** A trailing `nn.ReLU(),` had been swallowed
+  into the comment on the `nn.Linear(784, 128)` line. An earlier version of this note said
+  `victim.pt` was trained *with* the bug. That was wrong: the saved state_dict has layers at
+  `net.1 / net.3 / net.5`, i.e. Linear-ReLU-Linear-ReLU-Linear, so the weights were trained
+  with **both** ReLUs. The buggy code couldn't load them at all, so `MODEL=victim` crashed
+  and the API's default `MODEL=auto` silently served the **dummy** model. With the line
+  restored, `victim.pt` loads unchanged and scores exactly the baseline 96.42% on test.
+  **Follow-up:** `poisoning/label_flip.py` trains fresh models via `train_model()`, so its
+  current `poison_results/` came from the one-ReLU architecture and should be re-run.
+- `poisoning/label_flip.py` sets `OUT_DIR = os.path.join(vt.HERE, "poison_results")`, and
+  `vt.HERE` is `ai_security_project_victim/`, so re-running it writes there instead of to
+  `poisoning/poison_results/`. Worth fixing before the re-run above.
 - The **detection/defense monitor on the live API's query logs** (flagging
   suspicious query patterns for the extraction track) doesn't have code here
   yet.
