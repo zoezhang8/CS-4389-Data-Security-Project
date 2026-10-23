@@ -1,0 +1,12 @@
+{
+  "baseline_test_accuracy": 0.9642,
+  "seed": 42,
+  "split_sizes": {
+    "victim_train": 30000,
+    "attacker_pool": 20000,
+    "validation": 10000,
+    "test": 10000
+  },
+  "epochs": 5,
+  "architecture": "784-128-64-10 MLP, Adam lr=1e-3, batch 64"
+}
