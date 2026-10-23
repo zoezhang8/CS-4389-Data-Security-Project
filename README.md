@@ -65,8 +65,6 @@ cd extraction && python extract.py
 - The **detection/defense monitor on the live API's query logs** (flagging
   suspicious query patterns for the extraction track) doesn't have code here
   yet.
-- Ming's piece isn't reflected in this repo yet — unclear from the task list
-  what it covers.
 
 ## Report / threat model
 
