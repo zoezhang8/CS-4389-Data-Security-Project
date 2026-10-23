@@ -10,9 +10,9 @@ top of each.
 | --- | --- | --- |
 | Hafsah | Victim model & data pipeline | [`ai_security_project_victim/`](ai_security_project_victim/) |
 | Fahad | Query API & logging | [`fahad_api/`](fahad_api/) |
-| Sami | Data poisoning (label-flipping) + k-NN defense | [`poisoning/`](poisoning/) |
+| Ming | Data poisoning (label-flipping) + k-NN defense | [`poisoning/`](poisoning/) |
 | Zoe | Model extraction attack & repo setup — **done** | [`extraction/`](extraction/) |
-| — | Detection monitor on live API query logs | *not started yet* |
+| Sami | Detection monitor on live API query logs | *not started yet* |
 | — | Threat model, D1/D2 report | *see team doc* |
 
 ## Shared pieces
