@@ -12,8 +12,8 @@ top of each.
 | Fahad | Query API & logging | [`fahad_api/`](fahad_api/) |
 | Ming | Data poisoning (label-flipping) + k-NN defense | [`poisoning/`](poisoning/) |
 | Zoe | Model extraction attack & repo setup — **done** | [`extraction/`](extraction/) |
-| Sami | Detection monitor on live API query logs | *still implmenting* |
-| — | Threat model, D1/D2 report | *see team doc* |
+| Sami | Detection monitor on live API query logs | *in progress* |
+| Albion | Threat model, D1/D2 report | *see team doc* |
 
 ## Shared pieces
 
