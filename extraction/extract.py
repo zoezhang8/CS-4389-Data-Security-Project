@@ -1,36 +1,20 @@
-"""
-Model extraction track: steal a copy of the victim model through its query API.
+""" Zoe Zhang, 2024-06-05
+Model extraction track: steal a copy of the victim model through its query API
 
-Threat model: the attacker can only send images to Fahad's POST /predict and read
-back {"prediction", "probabilities"}. They never see victim_train, the victim's
-weights, or its code/architecture. As query inputs they use attacker_pool's
-IMAGES only (unlabeled in-distribution data, e.g. scraped digits) -- its true
-labels are never read.
+Attack:
+  1. query_victim() sends attacker_pool images to /predict and keeps the returned probability vectors as soft labels.
+  2. A substitute CNN is trained on pairs for several query budgets. Budgets are nested
+     prefixes of one shuffled order, so budget 20000 = the whole pool
 
-Attack
-  1. query_victim() sends attacker_pool images to /predict (X-Client-Id:
-     zoe-extraction) and keeps the returned probability vectors as soft labels.
-  2. A substitute CNN (deliberately NOT VictimNet's architecture) is trained on
-     (image, soft label) pairs, for several query budgets. Budgets are nested
-     prefixes of one shuffled order, so budget 20000 = the whole pool.
-Evaluation (evaluator side, not something the attacker can do)
-  - substitute_test_acc : substitute's accuracy vs. the test set's true labels
-  - fidelity            : how often substitute and victim predict the same label
-                          on the test set (the metric that matters for extraction)
-  The victim's test-set predictions are also obtained through the API, but under
-  a separate client id (zoe-extraction-eval) so the detection monitor can tell
-  attack traffic from scoring traffic.
-
-Run from this folder:   python extract.py
-Outputs go to ./extraction_results/ (results.csv, extraction_mnist.png,
-substitute_best.pt)
+run python extract.py
+outputs go to ./extraction_results/ (results.csv, extraction_mnist.png,substitute_best.pt)
 """
 import csv
 import os
 import sys
 import time
 
-os.environ["MODEL"] = "victim"   # api.py reads this at import: real model or fail
+os.environ["MODEL"] = "victim"   #api.py reads this at import: real model/ fail
 
 import matplotlib
 matplotlib.use("Agg")
@@ -43,8 +27,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-# victim_train is only used for get_data() (the shared seeded split); the
-# victim's weights and VictimNet are reached only through the API.
+#victim_train is only used for get_data() the victim's weights and VictimNet are reached only through the API
 sys.path.insert(0, os.path.join(ROOT, "ai_security_project_victim"))
 sys.path.insert(0, os.path.join(ROOT, "fahad_api"))
 import victim_train as vt  # noqa: E402
@@ -59,7 +42,7 @@ BATCH_SIZE = 64
 OUT_DIR = os.path.join(HERE, "extraction_results")
 
 
-# ---------------------------------------------------------------- API access
+# API access
 def query_victim(images, client_id=CLIENT_ID):
     """Send each (784,) image in [0, 1] to /predict; return (N, 10) probabilities.
 
@@ -78,7 +61,7 @@ def query_victim(images, client_id=CLIENT_ID):
     return probs
 
 
-# ---------------------------------------------------------------- substitute
+# subsitute
 class SubstituteNet(nn.Module):
     """Small CNN: 2x (conv5x5 -> ReLU -> maxpool) -> 128 -> 10.
 
@@ -132,7 +115,7 @@ def predict(model, images, batch_size=1024):
         return torch.cat([model(b).argmax(1) for b in x.split(batch_size)]).numpy()
 
 
-# ---------------------------------------------------------------- data
+#data
 def get_images(subset_or_dataset):
     """Images as an (N, 784) float32 array in [0, 1]; labels are not touched."""
     if hasattr(subset_or_dataset, "indices"):
@@ -142,19 +125,18 @@ def get_images(subset_or_dataset):
     return (raw.reshape(len(raw), -1).numpy() / 255.0).astype(np.float32)
 
 
-# ---------------------------------------------------------------- main
+#Main
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     _victim_train, attacker_pool, _validation, test = vt.get_data()
 
-    # attacker side: shuffle the pool once, query the largest budget, and use
-    # prefixes for the smaller ones (same queries a smaller attacker would send)
+    # attacker: shuffle the pool once, query the largest budget, and use prefixes for the smaller ones
     rng = np.random.default_rng(vt.SEED)
     pool = get_images(attacker_pool)[rng.permutation(len(attacker_pool))][:max(BUDGETS)]
     print(f"querying victim API with {len(pool)} attacker_pool images ({CLIENT_ID})")
     pool_probs = query_victim(pool)
 
-    # evaluator side: true test labels + victim's test predictions via the API
+    # evaluator: true test labels + victim's test predictions 
     X_test = get_images(test)
     y_test = test.targets.numpy()
     print(f"querying victim API with {len(X_test)} test images ({EVAL_CLIENT_ID})")
