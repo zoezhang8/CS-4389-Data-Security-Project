@@ -17,6 +17,8 @@ Defense preview
   k-NN label-consistency filter: drop training samples whose label disagrees
   with the majority label of their k nearest neighbors (raw pixels), then
   retrain. Reports detection TPR / FPR.
+  Generalized cross entropy (GCE): train on all observed labels using a loss
+  that gives less weight to examples the model finds inconsistent with their label.
 
 Run from this folder:   python label_flip.py
 Outputs go to ./poison_results/ (results.csv, label_flip_mnist.png)
@@ -43,6 +45,7 @@ import victim_train as vt
 FLIP_RATES = [0.0, 0.05, 0.10, 0.20, 0.30, 0.40]
 SOURCE, TARGET = 7, 1          # targeted attack: relabel some 7s as 1s
 KNN_K = 10
+GCE_Q = 0.7
 EPOCHS = 5                     # same as baseline
 OUT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -102,6 +105,11 @@ def flip_targeted(y, rate, rng, source=SOURCE, target=TARGET):
 
 
 # ---------------------------------------------------------------- defense
+def generalized_cross_entropy(logits, labels):
+    """Mean (1 - p_label**q) / q, evaluated using log probabilities for stability."""
+    log_p = torch.log_softmax(logits, dim=1).gather(1, labels.unsqueeze(1))
+    return -torch.expm1(GCE_Q * log_p).mean() / GCE_Q
+
 def knn_filter(X, y, k=KNN_K):
     """Return indices whose label disagrees with the majority of their k neighbors."""
     nn_index = NearestNeighbors(n_neighbors=k + 1).fit(X)
@@ -132,9 +140,9 @@ def class_recall(model, dataset, cls):
     return hit / total
 
 
-def run_one(train_base, labels, keep, test):
+def run_one(train_base, labels, keep, test, *, loss_fn=None):
     model = vt.train_model(RelabeledDataset(train_base, labels, keep),
-                           epochs=EPOCHS, verbose=False)
+                           epochs=EPOCHS, verbose=False, loss_fn=loss_fn)
     return vt.evaluate(model, test), class_recall(model, test, SOURCE)
 
 
@@ -161,16 +169,19 @@ def main():
             tpr, fpr = detection_rates(flagged, poisoned, len(y_p))
             keep = np.setdiff1d(np.arange(len(y_p)), flagged)
             acc_d, rec_d = run_one(victim_train, y_p, keep, test)
+            acc_gce, rec_gce = run_one(victim_train, y_p, None, test,
+                                       loss_fn=generalized_cross_entropy)
 
             row = {"attack": attack, "flip_rate": rate, "n_flipped": len(poisoned),
                    "test_acc": acc, f"class{SOURCE}_recall": rec,
                    "test_acc_defended": acc_d, f"class{SOURCE}_recall_defended": rec_d,
-                   "detect_TPR": tpr, "detect_FPR": fpr, "n_removed": len(flagged)}
+                   "detect_TPR": tpr, "detect_FPR": fpr, "n_removed": len(flagged),
+                   "test_acc_gce": acc_gce, f"class{SOURCE}_recall_gce": rec_gce}
             rows.append(row)
             print(f"{attack:8s} rate={rate:.2f} flipped={len(poisoned):5d} | "
                   f"acc={acc:.4f} class{SOURCE}_recall={rec:.4f} | "
-                  f"defended acc={acc_d:.4f} recall={rec_d:.4f} | "
-                  f"TPR={tpr:.2f} FPR={fpr:.3f}")
+                  f"k-NN acc={acc_d:.4f} recall={rec_d:.4f} TPR={tpr:.2f} FPR={fpr:.3f} | "
+                  f"GCE acc={acc_gce:.4f} recall={rec_gce:.4f}")
 
     csv_path = os.path.join(OUT_DIR, "results.csv")
     with open(csv_path, "w", newline="") as f:
@@ -188,16 +199,20 @@ def main():
         ax.plot(pct, [r[metric] for r in sub], "o-", color="#c0392b", label="No defense")
         ax.plot(pct, [r[metric + "_defended"] for r in sub], "s--", color="#2471a3",
                 label="k-NN filter")
+        ax.plot(pct, [r[metric + "_gce"] for r in sub], "^:", color="#18745b",
+                label=f"Generalized cross entropy (q={GCE_Q})")
         ax.set_title(title, fontsize=11)
-        ax.set_xlabel("Flip rate (%)")
+        ax.set_xlabel("Training labels flipped (%)" if attack == "random"
+                      else f"Class-{SOURCE} training labels flipped (%)")
         ax.set_ylabel("Score")
-        ax.set_ylim(0, 1.02)
+        ax.set_ylim(top=1.0)
         ax.grid(alpha=0.3)
         ax.legend()
     fig.suptitle("VictimNet (MNIST) under label-flipping poisoning", fontsize=12)
     fig.tight_layout()
     png_path = os.path.join(OUT_DIR, "label_flip_mnist.png")
     fig.savefig(png_path, dpi=150)
+    plt.close(fig)
     print(f"Saved {csv_path} and {png_path}")
 
 
