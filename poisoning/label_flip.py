@@ -44,7 +44,10 @@ FLIP_RATES = [0.0, 0.05, 0.10, 0.20, 0.30, 0.40]
 SOURCE, TARGET = 7, 1          # targeted attack: relabel some 7s as 1s
 KNN_K = 10
 EPOCHS = 5                     # same as baseline
-OUT_DIR = os.path.join(vt.HERE, "poison_results")
+OUT_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "poison_results"
+)
 
 
 # ---------------------------------------------------------------- datasets
