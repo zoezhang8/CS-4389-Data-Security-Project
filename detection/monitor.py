@@ -151,8 +151,8 @@ def main():
     args = parser.parse_args()
     args.alerts.parent.mkdir(parents=True, exist_ok=True)
 
-    # Replay replaces previous alerts; live monitoring appends.
-    mode = "a" if args.follow else "w"
+   
+    mode = "a"
 
     with args.alerts.open(mode, encoding="utf-8") as output:
         monitor = Monitor(output)
