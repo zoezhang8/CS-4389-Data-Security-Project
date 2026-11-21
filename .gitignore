@@ -4,5 +4,6 @@ __pycache__/
 venv/
 data/
 fahad_api/logs/
+detection/alerts.jsonl
 *.egg-info/
 .DS_Store
