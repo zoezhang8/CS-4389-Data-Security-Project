@@ -9,6 +9,7 @@ Attack:
 run python extract.py
 outputs go to ./extraction_results/ (results.csv, extraction_mnist.png,substitute_best.pt)
 """
+import argparse
 import csv
 import os
 import sys
@@ -43,23 +44,63 @@ OUT_DIR = os.path.join(HERE, "extraction_results")
 
 
 # API access
-def query_victim(images, client_id=CLIENT_ID):
-    """Send each (784,) image in [0, 1] to /predict; return (N, 10) probabilities.
+def query_victim(images, client_id):
+    """Query API and collect only successful responses.
 
-    The API takes one image per request, so this is one logged query per image.
+    Returns:
+        accepted_indices: positions of successful images
+        accepted_probs: corresponding probability vectors
     """
-    client = api.app.test_client()
-    probs = np.empty((len(images), 10), dtype=np.float32)
-    for i, x in enumerate(images):
-        r = client.post("/predict", json={"image": x.tolist()},
-                        headers={"X-Client-Id": client_id})
-        if r.status_code != 200:
-            raise RuntimeError(f"query {i} failed: {r.status_code} {r.get_json()}")
-        probs[i] = r.get_json()["probabilities"]
-        if (i + 1) % 5000 == 0:
-            print(f"  {client_id}: {i + 1}/{len(images)} queries")
-    return probs
 
+    client = api.app.test_client()
+
+    accepted_indices = []
+    accepted_probs = []
+    blocked = 0
+
+    for i, x in enumerate(images):
+        response = client.post(
+            "/predict",
+            json={"image": x.tolist()},
+            headers={"X-Client-Id": client_id},
+        )
+
+        if response.status_code == 200:
+            data = response.get_json()
+
+            if "probabilities" not in data:
+                raise RuntimeError(
+                    "API must have RETURN_PROBS=1 for extraction"
+                )
+
+            accepted_indices.append(i)
+            accepted_probs.append(data["probabilities"])
+
+        elif response.status_code == 429:
+            # Defense rejected this request.
+            blocked += 1
+
+        else:
+            raise RuntimeError(
+                f"Query {i} failed: "
+                f"{response.status_code} "
+                f"{response.get_json()}"
+            )
+
+        if (i + 1) % 5000 == 0:
+            print(
+                f"  {client_id}: "
+                f"attempted={i + 1}, "
+                f"allowed={len(accepted_indices)}, "
+                f"blocked={blocked}"
+            )
+
+    return (
+        np.asarray(accepted_indices, dtype=np.int32),
+        np.asarray(
+            accepted_probs, dtype=np.float32
+        ).reshape(-1, 10),
+    )
 
 # subsitute
 class SubstituteNet(nn.Module):
@@ -126,69 +167,279 @@ def get_images(subset_or_dataset):
 
 
 #Main
-def main():
-    os.makedirs(OUT_DIR, exist_ok=True)
-    _victim_train, attacker_pool, _validation, test = vt.get_data()
 
-    # attacker: shuffle the pool once, query the largest budget, and use prefixes for the smaller ones
-    rng = np.random.default_rng(vt.SEED)
-    pool = get_images(attacker_pool)[rng.permutation(len(attacker_pool))][:max(BUDGETS)]
-    print(f"querying victim API with {len(pool)} attacker_pool images ({CLIENT_ID})")
-    pool_probs = query_victim(pool)
+# -------------------------------------------------- experiments
 
-    # evaluator: true test labels + victim's test predictions 
-    X_test = get_images(test)
-    y_test = test.targets.numpy()
-    print(f"querying victim API with {len(X_test)} test images ({EVAL_CLIENT_ID})")
-    victim_test_pred = query_victim(X_test, client_id=EVAL_CLIENT_ID).argmax(1)
-    victim_acc = float((victim_test_pred == y_test).mean())
-    print(f"victim test accuracy (via API): {victim_acc:.4f}")
+def run_scenario(
+    mode, pool, X_test, y_test,
+    victim_test_pred, victim_acc
+):
+    # Each scenario starts with independent API counters.
+    api.reset_rate_limiter()
 
-    rows, best = [], None
+    # Turn defense on or off for this experiment.
+    api.RATE_LIMIT_ENABLED = (mode == "defended")
+
+    client_id = f"{CLIENT_ID}-{mode}"
+
+    print(f"\n== {mode.upper()} ==")
+    print(f"Querying {len(pool)} attacker images")
+
+    accepted_indices, accepted_probs = query_victim(
+        pool, client_id
+    )
+
+    print(
+        f"Allowed: {len(accepted_indices)} | "
+        f"Blocked: {len(pool) - len(accepted_indices)}"
+    )
+
+    rows = []
+    best = None
+
     for budget in BUDGETS:
+        # Budget represents attempted queries.
+        # Count the successful responses within that budget.
+        count = int(
+            np.searchsorted(
+                accepted_indices, budget, side="left"
+            )
+        )
+
+        if count == 0:
+            raise RuntimeError(
+                "No successful queries. Increase the quota."
+            )
+
+        # Train only on successfully queried images.
+        train_images = pool[accepted_indices[:count]]
+        train_probs = accepted_probs[:count]
+
         start = time.perf_counter()
-        model = train_substitute(pool[:budget], pool_probs[:budget])
+
+        model = train_substitute(
+            train_images, train_probs
+        )
+
         train_s = time.perf_counter() - start
+
+        # Evaluate substitute against real test labels.
         sub_pred = predict(model, X_test)
+
         acc = float((sub_pred == y_test).mean())
-        fid = float((sub_pred == victim_test_pred).mean())
-        rows.append({"query_budget": budget, "substitute_test_acc": acc, "fidelity": fid,
-                     "victim_test_acc": victim_acc, "train_seconds": round(train_s, 1)})
-        print(f"budget={budget:5d} | substitute acc={acc:.4f} fidelity={fid:.4f} | "
-              f"victim acc={victim_acc:.4f} | train {train_s:.0f}s")
+
+        # Fidelity = agreement with the real victim.
+        fid = float(
+            (sub_pred == victim_test_pred).mean()
+        )
+
+        row = {
+            "query_budget": budget,
+            "successful_queries": count,
+            "blocked_queries": budget - count,
+            "substitute_test_acc": acc,
+            "fidelity": fid,
+            "victim_test_acc": victim_acc,
+            "train_seconds": round(train_s, 1),
+        }
+
+        rows.append(row)
+
+        print(
+            f"attempts={budget:5d} | "
+            f"accepted={count:5d} | "
+            f"blocked={budget-count:5d} | "
+            f"accuracy={acc:.4f} | "
+            f"fidelity={fid:.4f}"
+        )
+
         if best is None or fid > best[0]:
             best = (fid, budget, model)
 
-    csv_path = os.path.join(OUT_DIR, "results.csv")
+    # Write separate results for each scenario.
+    csv_path = os.path.join(
+        OUT_DIR, f"results_{mode}.csv"
+    )
+
     with open(csv_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=rows[0].keys())
-        w.writeheader()
-        w.writerows(rows)
+        writer = csv.DictWriter(
+            f, fieldnames=rows[0].keys()
+        )
+        writer.writeheader()
+        writer.writerows(rows)
 
-    model_path = os.path.join(OUT_DIR, "substitute_best.pt")
+    # Preserve the best substitute for this scenario.
+    model_path = os.path.join(
+        OUT_DIR, f"substitute_best_{mode}.pt"
+    )
+
     torch.save(best[2].state_dict(), model_path)
-    print(f"best substitute: budget={best[1]} fidelity={best[0]:.4f}")
 
-    fig, ax = plt.subplots(figsize=(6.5, 4.2))
-    ax.plot(BUDGETS, [r["fidelity"] for r in rows], "o-", color="#c0392b",
-            label="Fidelity (agrees with victim)")
-    ax.plot(BUDGETS, [r["substitute_test_acc"] for r in rows], "s--", color="#2471a3",
-            label="Substitute test accuracy")
-    ax.axhline(victim_acc, color="gray", linestyle=":", label=f"Victim test accuracy ({victim_acc:.4f})")
+    print(f"Saved {csv_path}")
+    print(f"Saved {model_path}")
+
+    return rows
+
+
+# -------------------------------------------------- graph
+
+def plot_comparison(results, victim_acc):
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    styles = {
+        "unrestricted": ("o-", "s--"),
+        "defended": ("^-", "d--"),
+    }
+
+    for mode, rows in results.items():
+        x = [r["query_budget"] for r in rows]
+
+        accuracy = [
+            r["substitute_test_acc"] for r in rows
+        ]
+
+        fidelity = [
+            r["fidelity"] for r in rows
+        ]
+
+        ax.plot(
+            x, accuracy, styles[mode][0],
+            label=f"{mode.title()}: accuracy"
+        )
+
+        ax.plot(
+            x, fidelity, styles[mode][1],
+            label=f"{mode.title()}: fidelity"
+        )
+
+    ax.axhline(
+        victim_acc,
+        linestyle=":",
+        color="gray",
+        label=f"Victim test accuracy ({victim_acc:.4f})"
+    )
+
     ax.set_xscale("log")
     ax.set_xticks(BUDGETS)
-    ax.set_xticklabels([str(b) for b in BUDGETS])
-    ax.set_title("Substitute CNN trained on API soft labels", fontsize=11)
-    ax.set_xlabel("Query budget (attacker_pool images sent to /predict)")
+    ax.set_xticklabels([str(x) for x in BUDGETS])
+
+    ax.set_xlabel("Attempted API queries")
     ax.set_ylabel("Score")
     ax.set_ylim(0.8, 1.0)
+
+    ax.set_title(
+        "Model extraction: API defense comparison"
+    )
+
     ax.grid(alpha=0.3)
-    ax.legend(loc="lower right")
-    fig.suptitle("VictimNet (MNIST) under model extraction", fontsize=12)
+    ax.legend()
+
     fig.tight_layout()
-    png_path = os.path.join(OUT_DIR, "extraction_mnist.png")
-    fig.savefig(png_path, dpi=150)
-    print(f"Saved {csv_path}, {png_path} and {model_path}")
+
+    out_path = os.path.join(
+        OUT_DIR, "extraction_comparison.png"
+    )
+
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+    print(f"Saved {out_path}")
+
+
+# -------------------------------------------------- main
+
+def main():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--mode",
+        choices=("both", "unrestricted", "defended"),
+        default="both",
+    )
+
+    parser.add_argument(
+        "--quota",
+        type=int,
+        default=1000,
+        help="Maximum allowed queries in defended mode",
+    )
+
+    args = parser.parse_args()
+
+    if args.quota < 1:
+        parser.error("--quota must be at least 1")
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+
+    if not api.RETURN_PROBS:
+        raise RuntimeError(
+            "Extraction requires RETURN_PROBS=1"
+        )
+
+    # Use a hard query quota for reproducible comparison.
+    # Disable the optional time-window limit here.
+    api.RATE_LIMIT_MAX_QUERIES = args.quota
+    api.RATE_LIMIT_PER_WINDOW = 0
+    api.RATE_LIMIT_ENABLED = False
+    api.reset_rate_limiter()
+
+    # Load the same seeded MNIST split for both experiments.
+    _victim_train, attacker_pool, _validation, test = (
+        vt.get_data()
+    )
+
+    rng = np.random.default_rng(vt.SEED)
+
+    pool = get_images(attacker_pool)[
+        rng.permutation(len(attacker_pool))
+    ][:max(BUDGETS)]
+
+    X_test = get_images(test)
+    y_test = test.targets.numpy()
+
+    # Trusted evaluation happens before enabling the limit.
+    # These labels/predictions are never used for
+    # substitute training.
+    print(
+        f"Evaluating victim with {len(X_test)} test images"
+    )
+
+    eval_indices, eval_probs = query_victim(
+        X_test, EVAL_CLIENT_ID
+    )
+
+    if len(eval_indices) != len(X_test):
+        raise RuntimeError(
+            "Evaluation should not be rate limited"
+        )
+
+    victim_test_pred = eval_probs.argmax(axis=1)
+
+    victim_acc = float(
+        (victim_test_pred == y_test).mean()
+    )
+
+    print(f"Victim test accuracy: {victim_acc:.4f}")
+
+    # Run either one scenario or both.
+    if args.mode == "both":
+        modes = ("unrestricted", "defended")
+    else:
+        modes = (args.mode,)
+
+    results = {}
+
+    for mode in modes:
+        results[mode] = run_scenario(
+            mode,
+            pool,
+            X_test,
+            y_test,
+            victim_test_pred,
+            victim_acc,
+        )
+
+    plot_comparison(results, victim_acc)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+{"timestamp": "2026-11-20T20:49:39.487+00:00", "client_id": "zoe-extraction", "severity": "HIGH", "rule": "HIGH_QUERY_RATE", "count": 500}
+{"timestamp": "2026-11-20T20:49:41.842+00:00", "client_id": "zoe-extraction", "severity": "HIGH", "rule": "HIGH_TOTAL_QUERIES", "count": 2000}
+{"timestamp": "2026-11-20T22:28:19.127+00:00", "client_id": "zoe-extraction-unrestricted", "severity": "HIGH", "rule": "HIGH_QUERY_RATE", "count": 500}
+{"timestamp": "2026-11-20T22:28:21.465+00:00", "client_id": "zoe-extraction-unrestricted", "severity": "HIGH", "rule": "HIGH_TOTAL_QUERIES", "count": 2000}
+{"timestamp": "2026-11-20T22:31:10.633+00:00", "client_id": "zoe-extraction-defended", "severity": "HIGH", "rule": "HIGH_QUERY_RATE", "count": 500}
+{"timestamp": "2026-11-20T22:31:11.565+00:00", "client_id": "zoe-extraction-defended", "severity": "HIGH", "rule": "REPEATED_RATE_LIMIT_BLOCKS", "count": 20}
+{"timestamp": "2026-11-20T22:31:12.724+00:00", "client_id": "zoe-extraction-defended", "severity": "HIGH", "rule": "HIGH_TOTAL_QUERIES", "count": 2000}
