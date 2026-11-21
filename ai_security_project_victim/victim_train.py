@@ -46,7 +46,7 @@ def evaluate(model, dataset, batch_size=256):
     return correct / len(dataset)
  
  
-def train_model(train_dataset, epochs=5, lr=1e-3, batch_size=64, seed=SEED, verbose=True):
+def train_model(train_dataset, epochs=5, lr=1e-3, batch_size=64, seed=SEED, verbose=True, loss_fn=None):
     """Train a fresh VictimNet on `train_dataset` and return it.
  
     `train_dataset` can be any dataset yielding (image_tensor, label) pairs, so
@@ -56,7 +56,8 @@ def train_model(train_dataset, epochs=5, lr=1e-3, batch_size=64, seed=SEED, verb
     """
     torch.manual_seed(seed)
     model = VictimNet()
-    loss_fn = nn.CrossEntropyLoss()
+    if loss_fn is None:
+        loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
  

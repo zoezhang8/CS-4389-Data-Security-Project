@@ -12,7 +12,7 @@ top of each.
 | Fahad | Query API & logging | [`fahad_api/`](fahad_api/) |
 | Ming | Data poisoning (label-flipping) + k-NN defense | [`poisoning/`](poisoning/) |
 | Zoe | Model extraction attack & repo setup — **done** | [`extraction/`](extraction/) |
-| Sami | Detection monitor on live API query logs | *in progress* |
+| Sami | Detection monitor on live API query logs & Secondary Defenses | *in progress* |
 | Albion | Threat model, D1/D2 report | *see team doc* |
 
 ## Shared pieces
@@ -48,6 +48,17 @@ cd poisoning && python label_flip.py
 cd extraction && python extract.py
 ```
 
+The [label-flip graph](poisoning/poison_results/label_flip_mnist.png) compares
+ordinary training, k-NN filtering, and generalized cross entropy (GCE, `q=0.7`).
+Each method sees the same noisy labels for a given flip rate. GCE keeps every
+sample and gives less influence to labels the model assigns low probability.
+The left panel shows overall test accuracy under random flips. The right panel
+shows recall on test images of the digit 7 when a fraction of training 7s are
+relabeled as 1s. In the [results CSV](poisoning/poison_results/results.csv),
+`_defended` denotes k-NN and `_gce` denotes generalized cross entropy. Detection
+rates and removal counts describe the k-NN filter. The GCE loss and choice of
+`q` follow [Zhang and Sabuncu (2018)](https://proceedings.neurips.cc/paper/2018/file/f2925f97bc13ad2852a7a551802feea0-Paper.pdf).
+
 ## Known issues / open items
 
 - **Fixed: `victim_model.py` missing ReLU.** A trailing `nn.ReLU(),` had been swallowed
@@ -57,11 +68,6 @@ cd extraction && python extract.py
   with **both** ReLUs. The buggy code couldn't load them at all, so `MODEL=victim` crashed
   and the API's default `MODEL=auto` silently served the **dummy** model. With the line
   restored, `victim.pt` loads unchanged and scores exactly the baseline 96.42% on test.
-  **Follow-up:** `poisoning/label_flip.py` trains fresh models via `train_model()`, so its
-  current `poison_results/` came from the one-ReLU architecture and should be re-run.
-- `poisoning/label_flip.py` sets `OUT_DIR = os.path.join(vt.HERE, "poison_results")`, and
-  `vt.HERE` is `ai_security_project_victim/`, so re-running it writes there instead of to
-  `poisoning/poison_results/`. Worth fixing before the re-run above.
 - The **detection/defense monitor on the live API's query logs** (flagging
   suspicious query patterns for the extraction track) doesn't have code here
   yet.

@@ -39,6 +39,84 @@ RETURN_PROBS = os.environ.get("RETURN_PROBS", "1") == "1"
 
 _log_lock = threading.Lock()
 
+# -------------------------------------------------- rate limiting
+
+# Disabled by default so existing API behavior is preserved.
+RATE_LIMIT_ENABLED = (
+    os.environ.get("RATE_LIMIT_ENABLED", "0") == "1"
+)
+
+# Maximum allowed requests per client.
+# Set to 0 to disable the total query quota.
+RATE_LIMIT_MAX_QUERIES = int(
+    os.environ.get("RATE_LIMIT_MAX_QUERIES", "1000")
+)
+
+# Optional time-based limit.
+# Set to 0 to disable requests-per-window enforcement.
+RATE_LIMIT_PER_WINDOW = int(
+    os.environ.get("RATE_LIMIT_PER_WINDOW", "0")
+)
+
+RATE_LIMIT_WINDOW_SECONDS = int(
+    os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60")
+)
+
+_rate_lock = threading.Lock()
+_rate_state = {}
+
+
+def reset_rate_limiter():
+    """Clear counters between controlled experiments."""
+    with _rate_lock:
+        _rate_state.clear()
+
+
+def check_rate_limit(client_key):
+    """Return a rejection reason or None if request is allowed."""
+
+    if not RATE_LIMIT_ENABLED:
+        return None
+
+    now = time.monotonic()
+
+    with _rate_lock:
+        state = _rate_state.setdefault(
+            client_key,
+            {
+                "total": 0,
+                "window_count": 0,
+                "window_start": now,
+            },
+        )
+
+        # Start a new time window when the old one expires.
+        if (
+            now - state["window_start"]
+            >= RATE_LIMIT_WINDOW_SECONDS
+        ):
+            state["window_start"] = now
+            state["window_count"] = 0
+
+        # Enforce total allowed requests.
+        if (
+            RATE_LIMIT_MAX_QUERIES > 0
+            and state["total"] >= RATE_LIMIT_MAX_QUERIES
+        ):
+            return "query_quota_exceeded"
+
+        # Enforce optional requests-per-window threshold.
+        if (
+            RATE_LIMIT_PER_WINDOW > 0
+            and state["window_count"] >= RATE_LIMIT_PER_WINDOW
+        ):
+            return "rate_limit_exceeded"
+
+        # Count an allowed request.
+        state["total"] += 1
+        state["window_count"] += 1
+
+    return None
 
 # --------------------------------------------------------------------------- models
 class DummyModel:
@@ -135,6 +213,28 @@ def predict():
         "client_id": request.headers.get("X-Client-Id", ""),
         "model": MODEL.name,
     }
+
+    # Check rate limit before running model inference.
+    client_key = entry["client_id"] or entry["client_ip"]
+    rejection_reason = check_rate_limit(client_key)
+
+    if rejection_reason is not None:
+        entry.update(
+            status=429,
+            error=rejection_reason,
+            latency_ms=round(
+                (time.perf_counter() - start) * 1000, 2
+            ),
+        )
+
+        # Blocked requests are still recorded.
+        write_log(entry)
+
+        return jsonify(
+            error=rejection_reason,
+            model=MODEL.name
+        ), 429
+        
     try:
         payload = request.get_json(silent=True)
         x = parse_image(payload)
