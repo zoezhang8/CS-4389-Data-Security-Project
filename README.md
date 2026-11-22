@@ -213,8 +213,8 @@ At the 20,000-query budget, the committed results show:
 
 | Metric | Unrestricted | Defended |
 | --- | ---: | ---: |
-| Substitute test accuracy | 96.93% | 93.04% |
-| Fidelity | 97.82% | 94.32% |
+| Substitute test accuracy | 96.95% | 93.04% |
+| Fidelity | 97.99% | 94.32% |
 | Successful attacker queries | 20,000 | 1,000 |
 | Blocked attacker queries | 0 | 19,000 |
 
